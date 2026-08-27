@@ -1,0 +1,39 @@
+{
+  "title": "OLFML2B-STAD: reproducible multicohort, single-cell, spatial, proteomic and immunotherapy analysis workflow",
+  "upload_type": "software",
+  "description": "Complete Part0-Part9 R workflow supporting the manuscript 'Cross-cohort single-cell and spatial triangulation positions OLFML2B as a fibroblast-dominant stromal-ecology marker in gastric adenocarcinoma'.",
+  "creators": [
+    {
+      "name": "Huai, Lei",
+      "affiliation": "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+    },
+    {
+      "name": "Cai, Xin-Zhen",
+      "affiliation": "Department of Hematopathology, People's Hospital of GaoYou County, Yangzhou, Jiangsu, China"
+    },
+    {
+      "name": "Long, Zhang-Hui",
+      "affiliation": "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+    },
+    {
+      "name": "Fu, Yan-Xi",
+      "affiliation": "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+    },
+    {
+      "name": "Zang, Yuan-Sheng",
+      "affiliation": "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+    }
+  ],
+  "keywords": [
+    "OLFML2B",
+    "gastric adenocarcinoma",
+    "cancer-associated fibroblasts",
+    "extracellular matrix",
+    "single-cell RNA sequencing",
+    "spatial transcriptomics",
+    "proteomics"
+  ],
+  "access_right": "open",
+  "license": "MIT",
+  "version": "1.0.0"
+}

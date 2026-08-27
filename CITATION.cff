@@ -1,0 +1,45 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the manuscript and the archived software release."
+title: "OLFML2B-STAD: reproducible multicohort, single-cell, spatial, proteomic and immunotherapy analysis workflow"
+type: software
+version: "1.0.0"
+date-released: 2026-08-27
+license: MIT
+authors:
+  - family-names: Huai
+    given-names: Lei
+    affiliation: "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+  - family-names: Cai
+    given-names: Xin-Zhen
+    affiliation: "Department of Hematopathology, People's Hospital of GaoYou County, Yangzhou, Jiangsu, China"
+  - family-names: Long
+    given-names: Zhang-Hui
+    affiliation: "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+  - family-names: Fu
+    given-names: Yan-Xi
+    affiliation: "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+  - family-names: Zang
+    given-names: Yuan-Sheng
+    email: doctorzangys@163.com
+    affiliation: "Department of Medical Oncology, Changzheng Hospital, Naval Medical University, Shanghai, China"
+keywords:
+  - OLFML2B
+  - gastric adenocarcinoma
+  - cancer-associated fibroblasts
+  - extracellular matrix
+  - single-cell RNA sequencing
+  - spatial transcriptomics
+preferred-citation:
+  type: article
+  title: "Cross-cohort single-cell and spatial triangulation positions OLFML2B as a fibroblast-dominant stromal-ecology marker in gastric adenocarcinoma"
+  authors:
+    - family-names: Huai
+      given-names: Lei
+    - family-names: Cai
+      given-names: Xin-Zhen
+    - family-names: Long
+      given-names: Zhang-Hui
+    - family-names: Fu
+      given-names: Yan-Xi
+    - family-names: Zang
+      given-names: Yuan-Sheng

@@ -1,0 +1,48 @@
+# R session files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+*.Rproj
+
+# Generated project data / results
+data/
+output/
+logs/
+recovery/
+
+# Large/intermediate analysis objects
+*.rds
+*.Rds
+*.RDS
+*.rda
+*.RData
+*.h5
+*.hdf5
+*.h5ad
+*.loom
+*.qs
+*.fst
+*.feather
+
+# Download archives and temporary files
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.part
+*.tmp
+*.temp
+
+# Never commit manual PDC/TIGER payloads
+DATA_INBOX/PDC000614/*
+!DATA_INBOX/PDC000614/README.md
+DATA_INBOX/TIGER/*
+!DATA_INBOX/TIGER/README.md
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+~$*
+*.swp
+*.swo

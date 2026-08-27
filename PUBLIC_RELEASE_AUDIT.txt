@@ -1,0 +1,16 @@
+OLFML2B_STAD GitHub public release audit
+release=v1.0.0
+files_in_manifest=27
+r_files_total=12
+modified_r_files_structurally_checked=4
+modified_r_lexical_structure_check=PASS
+Part0_to_Part7_byte_identity_check=PASS
+legacy_UBE2Q2_path_scan=PASS
+personal_C_Users_path_scan=PASS
+possible_secret_assignment_scan=PASS
+raw_RDS_RDA_HDF5_artifact_scan=PASS
+active_Part9=09_OLFML2B_PART9_PUBLICATION_OUTPUTS_v8_10_1.R
+active_runner=00_RECOVER_AND_RUN_OLFML2B_FROM_ZERO_v1_0_2.R
+inactive_or_duplicate_code_included=NO
+raw_data_included=NO
+generated_outputs_included=NO
