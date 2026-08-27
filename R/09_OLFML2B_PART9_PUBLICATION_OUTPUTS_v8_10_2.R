@@ -58,10 +58,21 @@
 #   All Part9 row-binding calls are therefore explicitly namespaced.
 #   No statistical, data-selection, panel-contract, or figure-design rule changed.
 # =============================================================================
+# v8.10.2 publication-table stage-test reconciliation:
+#   The frozen Part3 clinical-context table stores omnibus one-way ANOVA F-test
+#   global_p values for stage, whereas Main Figure 1c and the manuscript use the
+#   prespecified omnibus Kruskal-Wallis stage test followed by BH-FDR.
+#   Patient/stage counts are identical across the two publication paths.
+#   Therefore, only Table S3 stage rows are canonicalised at Part9 export time:
+#     - stage global_p <- the exact Figure 1c Kruskal-Wallis P value;
+#     - all non-stage global_p values remain byte-for-value unchanged;
+#     - an explicit method/source note is added to Table S3.
+#   Part1-Part8 frozen outputs are not modified. No figure statistic is changed.
+# =============================================================================
 
 PART9_VERSION <- paste0(
-  "v8.10.1_20260826_NAMESPACE_ISOLATION_",
-  "DPLYR_BIND_ROWS_MASKING_REPAIR"
+  "v8.10.2_20260827_TABLE_S3_STAGE_",
+  "KRUSKAL_CANONICALISATION"
 )
 PART9_SEED <- 20260825L
 
@@ -3371,7 +3382,7 @@ supp_table_contract <- tribble(
   "Table S2", "GEO bulk cohort audit", "Part2", "Part2_GEO_bulk_cohort_audit.csv",
   "External-cohort platforms, endpoints and completeness",
   "Table S3", "Clinical-context expression summary", "Part3", "03c_olfml2b_expression_by_clinical_context.csv",
-  "All clinical-context levels and frozen global tests",
+  "Clinical-context levels; stage rows use the canonical Figure 1c omnibus Kruskal-Wallis P value, while non-stage rows retain frozen Part3 global tests",
   "Table S4", "All survival models", "Part3", "05_olfml2b_survival_all_models.csv",
   "Univariable, adjusted, available-covariate and sensitivity Cox models",
   "Table S5", "Survival meta-analysis", "Part3", "08_olfml2b_meta_analysis.csv",
@@ -3390,17 +3401,148 @@ supp_table_contract <- tribble(
   "Single-cohort exploratory ICI results and claim ceiling"
 )
 
+# Publication-facing Table S3 stage-test reconciliation.
+# IMPORTANT: this is deliberately confined to Part9 export.  The frozen Part3
+# source table is not edited.  Figure 1c already computes the canonical stage
+# omnibus test from the same patient-level Stage I-IV source rows.
+canonical_stage_p <- stage_global %>%
+  transmute(
+    cohort_key = str_replace_all(as.character(cohort), "_", "-"),
+    canonical_stage_global_p = as.numeric(kw_p),
+    canonical_stage_fdr = as.numeric(kw_fdr)
+  )
+
 supp_table_manifest <- pmap_dfr(
   supp_table_contract,
   function(table_id, title, part, file, scope) {
     dat <- read_contract(part, file, character())
+
+    if (identical(table_id, "Table S3")) {
+      required_s3 <- c("cohort", "variable", "level", "n", "median", "mean", "global_p")
+      absent_s3 <- setdiff(required_s3, names(dat))
+      if (length(absent_s3) > 0L) {
+        stop(
+          "Table S3 stage canonicalisation failed; absent columns: ",
+          paste(absent_s3, collapse = ", ")
+        )
+      }
+
+      dat_before <- dat
+      dat <- dat %>%
+        mutate(
+          .row_id_s3 = row_number(),
+          .cohort_key_s3 = str_replace_all(as.character(cohort), "_", "-"),
+          .variable_lower_s3 = str_to_lower(str_trim(as.character(variable)))
+        ) %>%
+        left_join(canonical_stage_p, by = c(".cohort_key_s3" = "cohort_key"))
+
+      stage_idx <- dat$.variable_lower_s3 == "stage"
+
+      if (!any(stage_idx)) {
+        stop("Table S3 stage canonicalisation failed: no stage rows were found.")
+      }
+      if (any(!is.finite(dat$canonical_stage_global_p[stage_idx]))) {
+        bad <- unique(dat$.cohort_key_s3[
+          stage_idx & !is.finite(dat$canonical_stage_global_p)
+        ])
+        stop(
+          "Table S3 stage canonicalisation failed: Figure 1c Kruskal-Wallis P ",
+          "value unavailable for cohort(s): ", paste(bad, collapse = ", ")
+        )
+      }
+
+      # ONLY stage global_p is replaced.  Non-stage values are untouched.
+      dat$global_p[stage_idx] <- dat$canonical_stage_global_p[stage_idx]
+
+      # Reader-facing provenance note.  This does not alter any non-stage statistic.
+      dat$global_test_method <- ifelse(
+        stage_idx,
+        "Kruskal-Wallis omnibus test across Stage I-IV",
+        "Frozen Part3 clinical-context global test"
+      )
+      dat$global_p_source <- ifelse(
+        stage_idx,
+        "Part9 Figure 1c canonical stage test; same Stage I-IV patient set",
+        "Part3/03c_olfml2b_expression_by_clinical_context.csv; unchanged"
+      )
+
+      # Guard 1: all non-stage global_p values must remain exactly unchanged.
+      nonstage_idx_before <- str_to_lower(
+        str_trim(as.character(dat_before$variable))
+      ) != "stage"
+      if (!identical(
+        as.numeric(dat$global_p[!stage_idx]),
+        as.numeric(dat_before$global_p[nonstage_idx_before])
+      )) {
+        stop(
+          "Table S3 canonicalisation contract failed: a non-stage global_p ",
+          "value changed."
+        )
+      }
+
+      # Guard 2: every stage row within a cohort must equal Figure 1c kw_p.
+      stage_check <- dat %>%
+        filter(stage_idx) %>%
+        transmute(
+          cohort,
+          level,
+          n,
+          exported_global_p = as.numeric(global_p),
+          figure1c_kw_p = as.numeric(canonical_stage_global_p),
+          figure1c_kw_fdr = as.numeric(canonical_stage_fdr),
+          exact_match = is.finite(exported_global_p) &
+            is.finite(figure1c_kw_p) &
+            abs(exported_global_p - figure1c_kw_p) <=
+              1e-12 * pmax(1, abs(figure1c_kw_p))
+        )
+
+      if (any(!stage_check$exact_match)) {
+        stop(
+          "Table S3 canonicalisation contract failed: exported stage global_p ",
+          "does not equal Figure 1c Kruskal-Wallis P."
+        )
+      }
+
+      readr::write_csv(
+        stage_check,
+        file.path(
+          AUDIT_DIR,
+          "02A_TABLE_S3_STAGE_GLOBAL_P_CANONICALISATION_v8_10_2.csv"
+        ),
+        na = ""
+      )
+
+      dat <- dat %>%
+        select(
+          -.row_id_s3,
+          -.cohort_key_s3,
+          -.variable_lower_s3,
+          -canonical_stage_global_p,
+          -canonical_stage_fdr
+        )
+    }
+
     suffix <- str_replace_all(table_id, " ", "_")
-    out_name <- paste0(suffix, "_", str_replace_all(title, "[^A-Za-z0-9]+", "_"), ".csv")
+    out_name <- paste0(
+      suffix, "_",
+      str_replace_all(title, "[^A-Za-z0-9]+", "_"),
+      ".csv"
+    )
     out_path <- file.path(SUPP_TABLE_DIR, out_name)
     readr::write_csv(dat, out_path, na = "")
+
     tibble(
       table_id, title, output_file = out_name,
-      source_input = paste(part, file, sep = "/"),
+      source_input = if (
+        identical(table_id, "Table S3")
+      ) {
+        paste0(
+          part, "/", file,
+          " + Part9 Figure 1c stage_global (Kruskal-Wallis canonicalisation only)"
+        )
+      } else {
+        paste(part, file, sep = "/")
+      },
       n_rows = nrow(dat), n_columns = ncol(dat), scope
     )
   }
