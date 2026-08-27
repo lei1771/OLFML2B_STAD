@@ -69,10 +69,48 @@
 #     - an explicit method/source note is added to Table S3.
 #   Part1-Part8 frozen outputs are not modified. No figure statistic is changed.
 # =============================================================================
+# v8.10.3 GSE84437 publication-facing provenance repair:
+#   The frozen Part2 GEO cohort audit correctly contains 433 formal-source
+#   samples and 431 complete OS observations, but older publication-facing
+#   wording could collapse these two distinct quantities into "formal OS, 431".
+#   In addition, the frozen cohort-audit row may leave the target-probe fields
+#   blank even though Part2 exported an independent exact OLFML2B mapping audit.
+#   Therefore Table S2 is reconciled at Part9 export time only:
+#     - 433 = formal 2016 source-subseries patients/samples;
+#     - 431 = OS-evaluable patients; 207 OS events;
+#     - 50 = context-only superseries samples excluded from formal inference;
+#     - exact OLFML2B probe IDs/mapping sources are joined from the frozen
+#       Part2_GEO_OLFML2B_mapping_audit.csv;
+#     - no Part2 object or analysis result is modified.
+# =============================================================================
+# v8.10.4 supplementary-table presentation and S12 reader-view repair:
+#   * Adds a frozen presentation contract for Tables S1-S12 containing:
+#       title, reader-facing note, missing-value rule, and abbreviations.
+#   * Writes one sidecar NOTE file per supplementary table so the final ESM
+#       workbook can be assembled directly from Part9 without editorial guessing.
+#   * Rebuilds Table S12 from heterogeneous internal claim-contract schemas into
+#       a non-sparse reader-facing six-column boundary table while preserving
+#       every source statement and source identifier.
+#   * Does not change any statistical result, figure, Part1-Part8 output, or
+#       existing numerical table value.
+# =============================================================================
+# v8.10.5 Table S12 publication-language normalization:
+#   QA of the v8.10.4 reader view showed five residual machine-facing values
+#   (e.g. FALSE, NOT_AVAILABLE, NO_NOMINAL_ASSOCIATION) in the publication
+#   statement column. These values are valid source-contract codes, but are not
+#   suitable as reader-facing prose.
+#   v8.10.5 therefore:
+#     - preserves the original code in boundary_class;
+#     - translates only the publication_statement field into literal,
+#       non-causal prose that does not exceed the frozen source meaning;
+#     - retains source_input for every row;
+#     - adds a fail-closed QA guard against raw Boolean/status-code statements.
+#   No statistical value, source contract, figure, or Part1-Part8 output changes.
+# =============================================================================
 
 PART9_VERSION <- paste0(
-  "v8.10.2_20260827_TABLE_S3_STAGE_",
-  "KRUSKAL_CANONICALISATION"
+  "v8.10.5_20260827_TABLE_S12_",
+  "PUBLICATION_LANGUAGE_NORMALIZATION"
 )
 PART9_SEED <- 20260825L
 
@@ -3380,7 +3418,7 @@ supp_table_contract <- tribble(
   "Table S1", "TCGA-STAD cohort audit", "Part1", "Part1_TCGA_cohort_audit.csv",
   "Discovery-cohort composition and expression audit",
   "Table S2", "GEO bulk cohort audit", "Part2", "Part2_GEO_bulk_cohort_audit.csv",
-  "External-cohort platforms, endpoints and completeness",
+  "External-cohort platforms, endpoints, completeness, exact OLFML2B mapping provenance, and explicit GSE84437 formal-source-versus-OS-evaluable counts",
   "Table S3", "Clinical-context expression summary", "Part3", "03c_olfml2b_expression_by_clinical_context.csv",
   "Clinical-context levels; stage rows use the canonical Figure 1c omnibus Kruskal-Wallis P value, while non-stage rows retain frozen Part3 global tests",
   "Table S4", "All survival models", "Part3", "05_olfml2b_survival_all_models.csv",
@@ -3412,10 +3450,216 @@ canonical_stage_p <- stage_global %>%
     canonical_stage_fdr = as.numeric(kw_fdr)
   )
 
+# Publication-facing GEO target-mapping provenance.
+# Part2 writes this independently from the cohort-audit table; joining it here
+# makes Table S2 self-contained without mutating any frozen Part2 output.
+geo_target_mapping_audit <- read_contract(
+  "Part2", "Part2_GEO_OLFML2B_mapping_audit.csv",
+  c("probe_id", "symbol", "primary_eligible", "cohort")
+)
+
+geo_target_mapping_summary <- geo_target_mapping_audit %>%
+  mutate(
+    cohort = as.character(cohort),
+    probe_id = as.character(probe_id),
+    symbol = toupper(str_trim(as.character(symbol))),
+    primary_eligible = as.logical(primary_eligible)
+  ) %>%
+  filter(
+    symbol == "OLFML2B",
+    primary_eligible %in% TRUE,
+    !is.na(probe_id),
+    nzchar(str_trim(probe_id))
+  ) %>%
+  group_by(cohort) %>%
+  summarise(
+    publication_olfml2b_probe_n = n_distinct(probe_id),
+    publication_olfml2b_probe_ids = paste(sort(unique(probe_id)), collapse = ";"),
+    publication_olfml2b_mapping_sources = if (
+      "mapping_source" %in% names(cur_data_all())
+    ) {
+      paste(
+        sort(unique(
+          as.character(cur_data_all()$mapping_source)[
+            !is.na(cur_data_all()$mapping_source) &
+              nzchar(str_trim(as.character(cur_data_all()$mapping_source)))
+          ]
+        )),
+        collapse = ";"
+      )
+    } else {
+      NA_character_
+    },
+    publication_olfml2b_mapping_status = "PASS_EXACT_PRIMARY_ELIGIBLE_OLFML2B",
+    .groups = "drop"
+  )
+
 supp_table_manifest <- pmap_dfr(
   supp_table_contract,
   function(table_id, title, part, file, scope) {
     dat <- read_contract(part, file, character())
+
+    if (identical(table_id, "Table S2")) {
+      required_s2 <- c(
+        "cohort", "n_samples_expression", "n_samples_clinical",
+        "n_os_complete", "os_events"
+      )
+      absent_s2 <- setdiff(required_s2, names(dat))
+      if (length(absent_s2) > 0L) {
+        stop(
+          "Table S2 provenance reconciliation failed; absent columns: ",
+          paste(absent_s2, collapse = ", ")
+        )
+      }
+
+      dat_before_s2 <- dat
+
+      dat <- dat %>%
+        mutate(cohort = as.character(cohort)) %>%
+        left_join(geo_target_mapping_summary, by = "cohort")
+
+      # Where the legacy cohort-audit fields are blank, recover the exact target
+      # probe count/IDs from the frozen Part2 mapping audit. Existing nonmissing
+      # values are preserved.
+      if ("n_olfml2b_probes" %in% names(dat)) {
+        old_n <- suppressWarnings(as.numeric(dat$n_olfml2b_probes))
+        mapped_n <- suppressWarnings(as.numeric(dat$publication_olfml2b_probe_n))
+        dat$n_olfml2b_probes <- ifelse(
+          is.finite(old_n), old_n, mapped_n
+        )
+      }
+      if ("olfml2b_probes" %in% names(dat)) {
+        old_probe <- as.character(dat$olfml2b_probes)
+        mapped_probe <- as.character(dat$publication_olfml2b_probe_ids)
+        use_old <- !is.na(old_probe) & nzchar(str_trim(old_probe))
+        dat$olfml2b_probes <- ifelse(use_old, old_probe, mapped_probe)
+      }
+
+      # Reader-facing endpoint/source definitions. These columns clarify that
+      # source-subseries membership and endpoint evaluability are distinct.
+      dat$formal_source_subseries_n <- NA_integer_
+      dat$os_evaluable_n <- suppressWarnings(as.integer(dat$n_os_complete))
+      dat$os_evaluable_events <- suppressWarnings(as.integer(dat$os_events))
+      dat$context_only_excluded_n <- NA_integer_
+      dat$formal_source_endpoint_note <- NA_character_
+
+      g844 <- dat$cohort == "GSE84437"
+      if (sum(g844) != 1L) {
+        stop(
+          "Table S2 provenance reconciliation failed: expected exactly one ",
+          "GSE84437 row; observed ", sum(g844), "."
+        )
+      }
+
+      # These fields were explicitly frozen by Part2's formal GSE84437 contract.
+      if (!all(c("n_formal_os", "n_context_only_excluded") %in% names(dat))) {
+        stop(
+          "Table S2 provenance reconciliation failed: GSE84437 formal-source ",
+          "audit fields n_formal_os/n_context_only_excluded are absent."
+        )
+      }
+
+      dat$formal_source_subseries_n[g844] <- suppressWarnings(
+        as.integer(dat$n_formal_os[g844])
+      )
+      dat$context_only_excluded_n[g844] <- suppressWarnings(
+        as.integer(dat$n_context_only_excluded[g844])
+      )
+      dat$formal_source_endpoint_note[g844] <- paste0(
+        "Formal 2016 source subseries: ",
+        dat$formal_source_subseries_n[g844],
+        " patients/samples; complete OS: ",
+        dat$os_evaluable_n[g844],
+        " patients (", dat$os_evaluable_events[g844],
+        " events); context-only superseries samples excluded: ",
+        dat$context_only_excluded_n[g844], "."
+      )
+
+      # Hard publication guard for the frozen GSE84437 contract.
+      g844_guard <- tibble(
+        criterion = c(
+          "formal_source_subseries_n",
+          "os_evaluable_n",
+          "os_events",
+          "context_only_excluded_n",
+          "expression_rows_equal_formal_source",
+          "clinical_rows_equal_formal_source",
+          "exact_olfml2b_mapping_available",
+          "legacy_probe_fields_publication_filled"
+        ),
+        observed = c(
+          as.character(dat$formal_source_subseries_n[g844]),
+          as.character(dat$os_evaluable_n[g844]),
+          as.character(dat$os_evaluable_events[g844]),
+          as.character(dat$context_only_excluded_n[g844]),
+          as.character(dat$n_samples_expression[g844]),
+          as.character(dat$n_samples_clinical[g844]),
+          as.character(dat$publication_olfml2b_probe_ids[g844]),
+          if (
+            "olfml2b_probes" %in% names(dat)
+          ) as.character(dat$olfml2b_probes[g844]) else NA_character_
+        ),
+        expected = c(
+          "433", "431", "207", "50", "433", "433",
+          "non-empty exact primary-eligible OLFML2B probe ID(s)",
+          "non-empty"
+        ),
+        pass = c(
+          dat$formal_source_subseries_n[g844] == 433L,
+          dat$os_evaluable_n[g844] == 431L,
+          dat$os_evaluable_events[g844] == 207L,
+          dat$context_only_excluded_n[g844] == 50L,
+          suppressWarnings(as.integer(dat$n_samples_expression[g844])) == 433L,
+          suppressWarnings(as.integer(dat$n_samples_clinical[g844])) == 433L,
+          !is.na(dat$publication_olfml2b_probe_ids[g844]) &
+            nzchar(str_trim(dat$publication_olfml2b_probe_ids[g844])) &
+            dat$publication_olfml2b_mapping_status[g844] ==
+              "PASS_EXACT_PRIMARY_ELIGIBLE_OLFML2B",
+          if ("olfml2b_probes" %in% names(dat)) {
+            !is.na(dat$olfml2b_probes[g844]) &
+              nzchar(str_trim(as.character(dat$olfml2b_probes[g844])))
+          } else {
+            FALSE
+          }
+        )
+      )
+
+      if (any(!g844_guard$pass)) {
+        stop(
+          "Table S2 GSE84437 publication contract failed: ",
+          paste(g844_guard$criterion[!g844_guard$pass], collapse = ", ")
+        )
+      }
+
+      # Guard: no pre-existing non-GSE84437 endpoint/sample-count field may be
+      # changed by the publication-facing reconciliation.
+      invariant_cols <- intersect(
+        c(
+          "n_samples_expression", "n_samples_clinical", "n_os_complete",
+          "os_events", "n_formal_os", "n_context_only_excluded"
+        ),
+        names(dat_before_s2)
+      )
+      for (cc in invariant_cols) {
+        before <- dat_before_s2[[cc]]
+        after <- dat[[cc]]
+        if (!identical(before, after)) {
+          stop(
+            "Table S2 reconciliation contract failed: frozen column '", cc,
+            "' changed."
+          )
+        }
+      }
+
+      readr::write_csv(
+        g844_guard,
+        file.path(
+          AUDIT_DIR,
+          "02B_TABLE_S2_GSE84437_PROVENANCE_RECONCILIATION_v8_10_3.csv"
+        ),
+        na = ""
+      )
+    }
 
     if (identical(table_id, "Table S3")) {
       required_s3 <- c("cohort", "variable", "level", "n", "median", "mean", "global_p")
@@ -3534,6 +3778,14 @@ supp_table_manifest <- pmap_dfr(
     tibble(
       table_id, title, output_file = out_name,
       source_input = if (
+        identical(table_id, "Table S2")
+      ) {
+        paste0(
+          part, "/", file,
+          " + Part2/Part2_GEO_OLFML2B_mapping_audit.csv ",
+          "(publication-facing GSE84437 count/mapping reconciliation only)"
+        )
+      } else if (
         identical(table_id, "Table S3")
       ) {
         paste0(
@@ -3565,19 +3817,378 @@ claim_tables <- list(
     "Part8_Immunotherapy", "27_final_molecular_context_claim_ceiling.csv", character()
   )
 )
-claim_boundary <- imap_dfr(claim_tables, ~mutate(.x, source_input = .y, .before = 1))
+# Reader-facing normalization of heterogeneous internal claim contracts.
+# The source files have different schemas by design; the old raw row-bind created
+# a sparse 13-column table.  This normalization does not infer new claims.
+# It maps source-native fields into a common publication-facing vocabulary.
+claim_boundary_reader <- dplyr::bind_rows(
+  claim_tables[["Part3/21_olfml2b_interpretation_boundary.csv"]] %>%
+    transmute(
+      evidence_layer = "Bulk expression / survival / ecological context",
+      domain = as.character(domain),
+      boundary_class = as.character(manuscript_use),
+      publication_statement = as.character(allowed_claim),
+      prohibited_or_unsupported_claim = NA_character_,
+      source_input = "Part3/21_olfml2b_interpretation_boundary.csv"
+    ),
+  claim_tables[["Part4/21_part4_methodology_claim_limits.csv"]] %>%
+    transmute(
+      evidence_layer = "Bulk tumour-microenvironment programmes",
+      domain = as.character(analysis_block),
+      boundary_class = "ALLOWED_WITH_EXPLICIT_PROHIBITION",
+      publication_statement = as.character(allowed_claim),
+      prohibited_or_unsupported_claim = as.character(prohibited_claim),
+      source_input = "Part4/21_part4_methodology_claim_limits.csv"
+    ),
+  claim_tables[["Part6/103_OLFML2B_Part6_unified_claim_boundary.csv"]] %>%
+    transmute(
+      evidence_layer = "Single-cell transcriptomics",
+      domain = "single_cell_claim_boundary",
+      boundary_class = as.character(level),
+      publication_statement = if_else(
+        toupper(as.character(level)) == "FORBIDDEN",
+        NA_character_,
+        as.character(statement)
+      ),
+      prohibited_or_unsupported_claim = if_else(
+        toupper(as.character(level)) == "FORBIDDEN",
+        as.character(statement),
+        NA_character_
+      ),
+      source_input = "Part6/103_OLFML2B_Part6_unified_claim_boundary.csv"
+    ),
+  claim_tables[["Part7/100_Part7_spatial_claim_boundary.csv"]] %>%
+    transmute(
+      evidence_layer = "Spatial transcriptomics",
+      domain = as.character(domain),
+      boundary_class = case_when(
+        as.character(domain) == "final_gene_lock" ~ "INTERNAL_CONTRACT_FLAG",
+        str_detect(str_to_lower(as.character(decision)), "not supported") ~
+          "NOT_SUPPORTED",
+        TRUE ~ "BOUNDARY_OR_ANALYSIS_RULE"
+      ),
+      publication_statement = case_when(
+        as.character(domain) == "final_gene_lock" ~
+          paste0(
+            "Internal source-contract flag retained for provenance: ",
+            "final_gene_lock = ", as.character(decision), "."
+          ),
+        str_detect(str_to_lower(as.character(decision)), "not supported") ~
+          NA_character_,
+        TRUE ~ as.character(decision)
+      ),
+      prohibited_or_unsupported_claim = if_else(
+        str_detect(str_to_lower(as.character(decision)), "not supported"),
+        as.character(decision),
+        NA_character_
+      ),
+      source_input = "Part7/100_Part7_spatial_claim_boundary.csv"
+    ),
+  claim_tables[["Part8_Immunotherapy/27_final_molecular_context_claim_ceiling.csv"]] %>%
+    transmute(
+      evidence_layer = "Anti-PD-1 response boundary",
+      domain = as.character(claim_domain),
+      boundary_class = as.character(status),
+      publication_statement = case_when(
+        as.character(claim_domain) == "molecular_annotation" &
+          as.character(status) == "NOT_AVAILABLE" ~
+            paste(
+              "Molecular annotations required for the intended contextual",
+              "stratification were not available."
+            ),
+        as.character(claim_domain) == "known_ici_biomarker_context" &
+          as.character(status) == "KNOWN_MARKER_SIGNAL_WEAK_OR_NOT_DETECTED" ~
+            paste(
+              "Established ICI-marker signals were weak or not detected in",
+              "this cohort; independence from standard biomarkers was not established."
+            ),
+        as.character(claim_domain) == "OLFML2B_standalone_ORR_prediction" &
+          as.character(status) == "NO_NOMINAL_ASSOCIATION" ~
+            paste(
+              "No nominal standalone association between OLFML2B and objective",
+              "response was observed in this cohort."
+            ),
+        as.character(claim_domain) == "intended_MSS_EBVneg_TMBlow_population" &
+          as.character(status) == "UNDERPOWERED_OR_NOT_EVALUABLE" ~
+            paste(
+              "The intended MSS/EBV-negative/TMB-low subgroup analysis was",
+              "underpowered or not evaluable."
+            ),
+        as.character(claim_domain) == "recommended_claim_ceiling" ~
+          as.character(status),
+        TRUE ~ paste0("Source-contract status: ", as.character(status), ".")
+      ),
+      prohibited_or_unsupported_claim = case_when(
+        as.character(claim_domain) == "OLFML2B_standalone_ORR_prediction" ~
+          "Do not claim OLFML2B as a validated standalone anti-PD-1 response biomarker.",
+        as.character(claim_domain) == "known_ici_biomarker_context" ~
+          "Do not claim independence from established ICI biomarkers.",
+        as.character(claim_domain) == "intended_MSS_EBVneg_TMBlow_population" ~
+          "Do not make a subgroup-specific predictive claim from the intended MSS/EBV-negative/TMB-low analysis.",
+        TRUE ~ NA_character_
+      ),
+      source_input =
+        "Part8_Immunotherapy/27_final_molecular_context_claim_ceiling.csv"
+    )
+) %>%
+  mutate(
+    across(
+      c(
+        evidence_layer, domain, boundary_class, publication_statement,
+        prohibited_or_unsupported_claim, source_input
+      ),
+      ~na_if(str_trim(as.character(.x)), "")
+    )
+  )
+
+if (nrow(claim_boundary_reader) != sum(vapply(claim_tables, nrow, integer(1)))) {
+  stop(
+    "Table S12 reader-view contract failed: normalized row count differs from ",
+    "the sum of frozen source claim-contract rows."
+  )
+}
+if (any(is.na(claim_boundary_reader$source_input))) {
+  stop("Table S12 reader-view contract failed: source_input is missing.")
+}
+
+# Fail closed if a machine-facing Boolean/status code remains as the complete
+# reader-facing publication statement.  boundary_class may retain source codes.
+machine_only_publication_values <- c(
+  "TRUE", "FALSE", "NOT_AVAILABLE",
+  "KNOWN_MARKER_SIGNAL_WEAK_OR_NOT_DETECTED",
+  "NO_NOMINAL_ASSOCIATION", "UNDERPOWERED_OR_NOT_EVALUABLE"
+)
+bad_machine_statement <- !is.na(claim_boundary_reader$publication_statement) &
+  str_trim(claim_boundary_reader$publication_statement) %in%
+    machine_only_publication_values
+
+if (any(bad_machine_statement)) {
+  stop(
+    "Table S12 publication-language QA failed; machine-facing statement(s) ",
+    "remain in row(s): ",
+    paste(which(bad_machine_statement), collapse = ", ")
+  )
+}
+
+s12_language_audit <- claim_boundary_reader %>%
+  transmute(
+    row_id = row_number(),
+    evidence_layer,
+    domain,
+    boundary_class,
+    publication_statement,
+    prohibited_or_unsupported_claim,
+    source_input,
+    publication_statement_is_machine_only =
+      !is.na(publication_statement) &
+      str_trim(publication_statement) %in% machine_only_publication_values,
+    source_provenance_present =
+      !is.na(source_input) & nzchar(str_trim(source_input))
+  )
+
+readr::write_csv(
+  s12_language_audit,
+  file.path(
+    AUDIT_DIR,
+    "02D_TABLE_S12_PUBLICATION_LANGUAGE_QA_v8_10_5.csv"
+  ),
+  na = ""
+)
+
 claim_out <- file.path(SUPP_TABLE_DIR, "Table_S12_Integrated_claim_boundaries.csv")
-readr::write_csv(claim_boundary, claim_out, na = "")
+readr::write_csv(claim_boundary_reader, claim_out, na = "")
+
 supp_table_manifest <- dplyr::bind_rows(
   supp_table_manifest,
   tibble(
     table_id = "Table S12", title = "Integrated claim boundaries",
     output_file = basename(claim_out),
     source_input = paste(names(claim_tables), collapse = "; "),
-    n_rows = nrow(claim_boundary), n_columns = ncol(claim_boundary),
-    scope = "Allowed claims and interpretation ceilings across Parts 3-8"
+    n_rows = nrow(claim_boundary_reader), n_columns = ncol(claim_boundary_reader),
+    scope = paste(
+      "Reader-facing allowed claims, explicit limitations and interpretation",
+      "ceilings across Parts 3-8; all source statements retain source provenance"
+    )
   )
 )
+
+# ---------------------------------------------------------------------------
+# Supplementary-table presentation contract: titles, notes, missing-value rules,
+# and abbreviations.  These sidecars are publication metadata and do not alter
+# the machine-readable numerical tables.
+# ---------------------------------------------------------------------------
+supp_table_presentation <- tribble(
+  ~table_id, ~title, ~note, ~missing_value_rule, ~abbreviations,
+
+  "Table S1", "TCGA-STAD cohort audit",
+  paste(
+    "Cohort composition and target-expression audit for TCGA-STAD.",
+    "Counts refer to the frozen evaluable data used by the analysis pipeline;",
+    "target identifiers and locus information are included for reproducibility."
+  ),
+  "Blank fields indicate information not applicable to this one-row TCGA audit.",
+  "OS, overall survival; TCGA-STAD, The Cancer Genome Atlas stomach adenocarcinoma; TPM, transcripts per million; HGNC, HUGO Gene Nomenclature Committee.",
+
+  "Table S2", "GEO bulk cohort audit",
+  paste(
+    "Platform, sample, endpoint, target-probe and provenance audit for the four",
+    "external GEO bulk cohorts. For GSE84437, 433 denotes the formal source",
+    "subseries, 431 denotes patients with complete OS data, 207 denotes OS events,",
+    "and 50 context-only superseries samples were excluded from formal inference."
+  ),
+  paste(
+    "Blank cells mean that the corresponding field was structurally unavailable,",
+    "not applicable to that cohort, or not used for formal inference; blanks must",
+    "not be interpreted as zero."
+  ),
+  "DFS, disease-free survival; GEO, Gene Expression Omnibus; OS, overall survival; RFS, recurrence-free survival.",
+
+  "Table S3", "Clinical-context expression summary",
+  paste(
+    "OLFML2B expression summaries across available clinical strata.",
+    "Stage global P values are omnibus Kruskal-Wallis tests across Stage I-IV and",
+    "are repeated across stage rows only to retain a rectangular table.",
+    "Non-stage global tests retain the frozen Part3 clinical-context tests."
+  ),
+  "Blank fields indicate unavailable clinical strata or non-applicable metadata.",
+  "FDR, false discovery rate; NA, not available.",
+
+  "Table S4", "All survival models",
+  paste(
+    "Complete univariable, common-adjustment, available-covariate and sensitivity",
+    "Cox models for OLFML2B. Continuous effects are reported per one within-cohort",
+    "standard-deviation increase in OLFML2B expression."
+  ),
+  paste(
+    "Blank diagnostic or imputation fields indicate that the item was not",
+    "applicable, not estimable, or intentionally not used for that model."
+  ),
+  "CI, confidence interval; DFS, disease-free survival; HR, hazard ratio; OS, overall survival; PH, proportional hazards; RFS, recurrence-free survival.",
+
+  "Table S5", "Survival meta-analysis",
+  paste(
+    "Random-effects meta-analyses of structurally eligible cohort-specific Cox",
+    "models, including heterogeneity, prediction intervals, and REML cross-checks."
+  ),
+  "Blank values denote quantities that were not estimable or not applicable for the specified small-k synthesis.",
+  "CI, confidence interval; HR, hazard ratio; I2, I-squared heterogeneity statistic; REML, restricted maximum likelihood.",
+
+  "Table S6", "TME meta-correlations",
+  paste(
+    "Cross-cohort random-effects synthesis of Spearman correlations between",
+    "OLFML2B and prespecified tumour-microenvironment programme scores."
+  ),
+  "Blank values indicate non-estimable quantities for the relevant programme synthesis.",
+  "CAF, cancer-associated fibroblast; ECM, extracellular matrix; FDR, false discovery rate; TME, tumour microenvironment.",
+
+  "Table S7", "TME-adjusted survival models",
+  paste(
+    "Same-patient nested Cox models assessing statistical attenuation of the",
+    "OLFML2B coefficient after adding prespecified ecological axes.",
+    "Attenuation is a sensitivity analysis and is not a causal mediated proportion."
+  ),
+  paste(
+    "Blank cells indicate unavailable, non-estimable or structurally non-applicable",
+    "diagnostics; they are not zeros."
+  ),
+  "AIC, Akaike information criterion; CAF, cancer-associated fibroblast; CI, confidence interval; ECM, extracellular matrix; FDR, false discovery rate; HR, hazard ratio; PH, proportional hazards; TME, tumour microenvironment; VIF, variance inflation factor.",
+
+  "Table S8", "Protein direction tests",
+  paste(
+    "Case-paired OLFML2B protein direction analyses in PDC000614, including",
+    "bootstrap uncertainty, exact sign tests, analytical-plex direction and",
+    "leave-one-plex-out sensitivity."
+  ),
+  "Blank fields indicate a statistic not estimable or not applicable to the stated value type.",
+  "CI, confidence interval; PDC, Proteomic Data Commons.",
+
+  "Table S9", "Single-cell source evidence matrix",
+  paste(
+    "Cross-dataset evidence matrix used to rank preferential cellular localisation",
+    "of OLFML2B. Evidence grades integrate dataset eligibility, top-rank recurrence,",
+    "leave-one-dataset-out stability, threshold consistency and paired contrasts."
+  ),
+  "Zero indicates no qualifying evidence under the frozen rule; blank would indicate not evaluated.",
+  "CAF, cancer-associated fibroblast; ECM, extracellular matrix; LODO, leave-one-dataset-out.",
+
+  "Table S10", "Single-cell/spatial concordance",
+  paste(
+    "Cross-modality concordance between single-cell source expectations and",
+    "patient-level spatial same-spot, neighbourhood and competing-source analyses.",
+    "The table supports spatial association only, not cell identity or causality."
+  ),
+  "Blank values indicate that the corresponding spatial summary was unavailable or not estimable.",
+  "CAF, cancer-associated fibroblast; ECM, extracellular matrix.",
+
+  "Table S11", "Immunotherapy publication summary",
+  paste(
+    "Patient-level exploratory anti-PD-1 results in PRJEB25780/TIGER.",
+    "This single cohort defines the boundary of response-prediction claims and is",
+    "not an independent validation of a predictive biomarker."
+  ),
+  paste(
+    "Blank values denote molecular annotations or model quantities that were",
+    "unavailable or not estimable; blanks are not negative results."
+  ),
+  "AUC, area under the receiver-operating-characteristic curve; CR, complete response; DCR, disease control rate; ICI, immune-checkpoint inhibitor; NR, non-responder; ORR, objective response rate; PD, progressive disease; PR, partial response; SD, stable disease.",
+
+  "Table S12", "Integrated claim boundaries",
+  paste(
+    "Reader-facing synthesis of the explicit claim ceilings frozen across Parts 3-8.",
+    "Rows preserve source provenance and distinguish supported publication language",
+    "from prohibited, unsupported or not-evaluable claims."
+  ),
+  "Blank supported/prohibited cells mean that the source contract did not specify that side of the boundary.",
+  "CAF, cancer-associated fibroblast; ECM, extracellular matrix; ICI, immune-checkpoint inhibitor; ORR, objective response rate; TME, tumour microenvironment."
+)
+
+if (nrow(supp_table_presentation) != 12L ||
+    anyDuplicated(supp_table_presentation$table_id)) {
+  stop("Supplementary-table presentation contract must contain exactly one row for Tables S1-S12.")
+}
+
+# Attach publication metadata to the manifest.
+supp_table_manifest <- supp_table_manifest %>%
+  left_join(supp_table_presentation, by = c("table_id", "title"))
+
+if (any(is.na(supp_table_manifest$note)) ||
+    any(is.na(supp_table_manifest$missing_value_rule)) ||
+    any(is.na(supp_table_manifest$abbreviations))) {
+  stop("Supplementary-table presentation metadata is incomplete after manifest join.")
+}
+
+presentation_out <- file.path(
+  SUPP_TABLE_DIR,
+  "00_Supplementary_Table_Titles_Notes_Abbreviations.csv"
+)
+readr::write_csv(supp_table_presentation, presentation_out, na = "")
+
+readr::write_csv(
+  supp_table_presentation,
+  file.path(
+    AUDIT_DIR,
+    "02C_SUPPLEMENTARY_TABLE_PRESENTATION_CONTRACT_v8_10_4.csv"
+  ),
+  na = ""
+)
+
+# One human-readable sidecar note per table for deterministic ESM workbook assembly.
+for (i in seq_len(nrow(supp_table_presentation))) {
+  rr <- supp_table_presentation[i, ]
+  note_lines <- c(
+    paste0(rr$table_id, ". ", rr$title),
+    "",
+    paste0("Note: ", rr$note),
+    paste0("Missing-value rule: ", rr$missing_value_rule),
+    paste0("Abbreviations: ", rr$abbreviations)
+  )
+  note_file <- file.path(
+    SUPP_TABLE_DIR,
+    paste0(str_replace_all(rr$table_id, " ", "_"), "_NOTE.txt")
+  )
+  writeLines(note_lines, note_file, useBytes = TRUE)
+}
+
 readr::write_csv(
   supp_table_manifest,
   file.path(AUDIT_DIR, "02_SUPPLEMENTARY_TABLE_MANIFEST_v8_10_0.csv"),
